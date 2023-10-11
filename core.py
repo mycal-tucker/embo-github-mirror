@@ -23,6 +23,7 @@ from .utils import p_joint, mi_x1x2_c, compute_upper_bound, kl_divergence, entro
 
 np.seterr(divide='ignore', invalid='ignore')
 
+
 class InformationBottleneck:
 
     def __init__(self, x=None, y=None, alpha=1, window_size_x=1, window_size_y=1, pxy=None, **kwargs):
@@ -45,25 +46,25 @@ class InformationBottleneck:
         self.window_size_y = window_size_y
         self.kwargs_IB = kwargs
         self.results_ready = False
-        if (x is not None and not np.all(np.isfinite(self.x))) or\
-           (y is not None and not np.all(np.isfinite(self.y))):
+        if (x is not None and not np.all(np.isfinite(self.x))) or \
+                (y is not None and not np.all(np.isfinite(self.y))):
             raise ValueError("The observation data contains NaNs or Infs.")
         if pxy is not None and (x is not None or y is not None):
             raise ValueError("It is not possible to specify both pxy and the empirical data x,y.")
         self.pxy_j = pxy
         if self.pxy_j is not None:
-            if not np.all(self.pxy_j>=0):
+            if not np.all(self.pxy_j >= 0):
                 raise ValueError("Negative values in the specified joint p(X,Y).")
-            self.pxy_j /= 1.0*self.pxy_j.sum()
+            self.pxy_j /= 1.0 * self.pxy_j.sum()
         elif x is None or y is None:
             raise ValueError("Eiter pxy or x and y should be specified.")
-        elif len(x)==0 or len(y)==0:
+        elif len(x) == 0 or len(y) == 0:
             raise ValueError("If pxy is not specified, x and y can't be empty.")
         self.get_empirical_bottleneck = self.get_bottleneck
 
     def compute_IB_curve(self):
         """ Compute the IB curve for the joint empirical observations for X and Y. """
-        
+
         # Marginal, joint and conditional distributions required to calculate the IB
         if self.pxy_j is None:
             self.pxy_j = p_joint(self.x, self.y, self.window_size_x, self.window_size_y)
@@ -73,12 +74,15 @@ class InformationBottleneck:
         pyx_c = self.pxy_j.T / px
 
         # Calculate the information bottleneck for a range of values of beta
-        self.i_x, self.i_y, self.h_m, self.beta, self.mixy, self.hx = self.IB(px, py, pyx_c, self.alpha, **self.kwargs_IB)
+        self.i_x, self.i_y, self.h_m, self.beta, self.mixy, self.hx, self.pm, self.encs, self.decs = self.IB(px, py,
+                                                                                                             pyx_c,
+                                                                                                             self.alpha,
+                                                                                                             **self.kwargs_IB)
         self.hy = entropy(py)
 
         # set a flag we will use to call this function automatically when needed
         self.results_ready = True
-    
+
     def get_bottleneck(self, return_entropies=False):
         """Return array of I(M:X) and I(M:Y) for array of different values of beta
 
@@ -93,12 +97,12 @@ class InformationBottleneck:
         """
         if not self.results_ready:
             self.compute_IB_curve()
-        
+
         if return_entropies:
             return self.i_x, self.i_y, self.h_m, self.beta, self.mixy, self.hx, self.hy
         else:
             return self.i_x, self.i_y, self.h_m, self.beta
-    
+
     def get_ix(self):
         if not self.results_ready:
             self.compute_IB_curve()
@@ -129,6 +133,11 @@ class InformationBottleneck:
             self.compute_IB_curve()
         return self.hx, self.hy
 
+    def get_encs_decs(self):
+        if not self.results_ready:
+            self.compute_IB_curve()
+        return self.pm, self.encs, self.decs
+
     @classmethod
     def beta_iter(cls, a, b, px, py, pyx_c, pm_size, restarts, iterations, rtol=1e-3, atol=0):
         """Function to run BA algorithm for individual values of beta
@@ -151,7 +160,7 @@ class InformationBottleneck:
         for r in range(restarts):
 
             # initialization
-            if pm_size==px.size and pm_size>0:
+            if pm_size == px.size and pm_size > 0:
                 # by default pm_size will be the same as px.size. In
                 # this case we initialize similarly to Strouse and
                 # Schwab 2016: for x_j, most of the mass of the
@@ -159,31 +168,30 @@ class InformationBottleneck:
                 # the mass is distributed randomly over the other
                 # values of m.
                 pmx_c = np.zeros((pm_size, px.size))
-                delta = 0.2 * np.random.rand(1,px.size)
-                pmx_c[0,:] = 0.75 - delta
-                pmx_c[1:,:] = np.random.rand(pm_size-1, px.size)+1
-                pmx_c[1:,:] = (0.25+delta)*pmx_c[1:,:]/(pmx_c[1:,:].sum(axis=0))
+                delta = 0.2 * np.random.rand(1, px.size)
+                pmx_c[0, :] = 0.75 - delta
+                pmx_c[1:, :] = np.random.rand(pm_size - 1, px.size) + 1
+                pmx_c[1:, :] = (0.25 + delta) * pmx_c[1:, :] / (pmx_c[1:, :].sum(axis=0))
                 for kx in range(pmx_c.shape[1]):
-                    pmx_c[:,kx] = np.roll(pmx_c[:,kx], kx)
+                    pmx_c[:, kx] = np.roll(pmx_c[:, kx], kx)
                 pm = p_m(pmx_c, px)
                 pym_c = p_ym_c(pm, px, pyx_c, pmx_c)
             else:
                 # legacy initialization scheme
-                pm = np.random.rand(pm_size)+1
+                pm = np.random.rand(pm_size) + 1
                 pm /= pm.sum()
-                pym_c = np.random.rand(py.size, pm.size)+1  # Starting point for the algorithm
+                pym_c = np.random.rand(py.size, pm.size) + 1  # Starting point for the algorithm
                 pym_c /= pym_c.sum(axis=0)
-                    
-            
+
             # Iterate the BA algorithm
             for i in range(iterations):
                 pmx_c, z = p_mx_c(pm, px, pyx_c, pym_c, a, b)
-                pm = p_m(pmx_c,px)
+                pm = p_m(pmx_c, px)
                 pm, pmx_c, pym_c = drop_unused_dimensions(pm, pmx_c, pym_c)
                 pym_c = p_ym_c(pm, px, pyx_c, pmx_c)
                 pm, pmx_c, pym_c = drop_unused_dimensions(pm, pmx_c, pym_c)
                 # compute cost: H(M)-αH(M|X)-βI(M:Y)
-                if a==1:
+                if a == 1:
                     # specialized efficient form for the regular IΒ
                     # (eq. 29 in Tishby 2000; equivalent to the
                     # formula below, but faster)
@@ -197,17 +205,24 @@ class InformationBottleneck:
                 cost_old = cost
             candidates.append({'info_x': mi_x1x2_c(pm, px, pmx_c),
                                'info_y': mi_x1x2_c(py, pm, pym_c),
-                               'entropy_m' : entropy(pm),
+                               'entropy_m': entropy(pm),
+                               'pm': pm,
+                               'pmx_c': pmx_c,
+                               'pym_c': pym_c,
                                'cost': cost})
         # among the restarts, select the result with minimum cost
         selected_candidate = min(candidates, key=lambda c: c['cost'])
         i_x = selected_candidate['info_x']
         i_y = selected_candidate['info_y']
         h_m = selected_candidate['entropy_m']
-        return [i_x, i_y, h_m, b]
+        pm = selected_candidate['pm']
+        pmx_c = selected_candidate['pmx_c']
+        pym_c = selected_candidate['pym_c']
+        return [i_x, i_y, h_m, b, pm, pmx_c, pym_c]
 
     @classmethod
-    def IB(cls, px, py, pyx_c, alpha=1, minsize = False, maxbeta=5, minbeta=1e-2, numbeta=30, iterations=100, restarts=3, processes=1, ensure_monotonic_bound='auto', rtol=1e-3):
+    def IB(cls, px, py, pyx_c, alpha=1, minsize=False, maxbeta=5, minbeta=1e-2, numbeta=50, iterations=100, restarts=3,
+           processes=1, ensure_monotonic_bound='auto', rtol=1e-3):
         """Compute an Information Bottleneck curve
 
         Arguments:
@@ -235,18 +250,23 @@ class InformationBottleneck:
         """
         pm_size = px.size
         if minsize:
-            pm_size = min(px.size,py.size)  # Get compression size - smallest size
-        
+            pm_size = min(px.size, py.size)  # Get compression size - smallest size
+
         bs = np.linspace(minbeta, maxbeta, numbeta)  # value of beta
 
         # Parallel computing of compression for desired beta values
         with mp.Pool(processes=processes) as pool:
-            results = [pool.apply_async(cls.beta_iter, args=(alpha, b, px, py, pyx_c, pm_size, restarts, iterations,rtol)) for b in bs]
+            results = [
+                pool.apply_async(cls.beta_iter, args=(alpha, b, px, py, pyx_c, pm_size, restarts, iterations, rtol)) for
+                b in bs]
             results = [p.get() for p in results]
         ips = [x[0] for x in results]
         ifs = [x[1] for x in results]
         hms = [x[2] for x in results]
         bs = [x[3] for x in results]
+        pms = [x[4] for x in results]
+        encs = [x[5] for x in results]
+        decs = [x[6] for x in results]
 
         # Values of beta may not be sorted appropriately due to out-of
         # order execution if using many processes. So we have so sort
@@ -254,6 +274,9 @@ class InformationBottleneck:
         ips = [x for _, x in sorted(zip(bs, ips))]
         ifs = [x for _, x in sorted(zip(bs, ifs))]
         hms = [x for _, x in sorted(zip(bs, hms))]
+        pms = [x for _, x in sorted(zip(bs, pms))]
+        encs = [x for _, x in sorted(zip(bs, encs))]
+        decs = [x for _, x in sorted(zip(bs, decs))]
         bs = sorted(bs)
 
         # restrict the returned values to those that, at each value of
@@ -263,30 +286,37 @@ class InformationBottleneck:
         # from cases where the AB algorithm gets stuck in a local
         # minimum.
         if ensure_monotonic_bound:
-            if ensure_monotonic_bound=='auto':
-                if alpha==1:
+            if ensure_monotonic_bound == 'auto':
+                if alpha == 1:
                     # If alpha ==1 (vanilla IB), we ensure monotonicity in the IB plane
                     ensure_monotonic_bound = 'information'
-                elif alpha==0:
+                elif alpha == 0:
                     # If alpha==0, we ensure monotonicity in the DIB plane
                     ensure_monotonic_bound = 'entropy'
-            if ensure_monotonic_bound=='information':
+            if ensure_monotonic_bound == 'information':
                 ub, idxs = compute_upper_bound(ips, ifs)
                 ips = np.squeeze(ub[:, 0])
                 ifs = np.squeeze(ub[:, 1])
                 hms = np.array(hms)[idxs]
                 bs = np.array(bs)[idxs]
-            elif ensure_monotonic_bound=='entropy':
+                pms = np.array(pms)[idxs]
+                encs = np.array(encs)[idxs]
+                decs = np.array(decs)[idxs]
+            elif ensure_monotonic_bound == 'entropy':
                 ub, idxs = compute_upper_bound(hms, ifs)
                 hms = np.squeeze(ub[:, 0])
                 ifs = np.squeeze(ub[:, 1])
                 ips = np.array(ips)[idxs]
                 bs = np.array(bs)[idxs]
+                pms = [pms[i] for i in idxs]
+                encs = [encs[i] for i in idxs]
+                decs = [decs[i] for i in idxs]
 
         # Return saturation point (mixy) and max horizontal axis (hx)
         mixy = mi_x1x2_c(py, px, pyx_c)
         hx = entropy(px)
-        return ips, ifs, hms, bs, mixy, hx
+        return ips, ifs, hms, bs, mixy, hx, pms, encs, decs
+
 
 def elementwise_l(pm, px, pyx_c, pym_c, alpha, beta):
     """Log-loss function, elementwise.
@@ -295,7 +325,8 @@ def elementwise_l(pm, px, pyx_c, pym_c, alpha, beta):
     where 0<α≤1.
 
     """
-    return (np.log(pm[:,np.newaxis]) - beta * kl_divergence(pyx_c[:,np.newaxis,:], pym_c[:,:,np.newaxis]))/alpha
+    return (np.log(pm[:, np.newaxis]) - beta * kl_divergence(pyx_c[:, np.newaxis, :], pym_c[:, :, np.newaxis])) / alpha
+
 
 def p_mx_c(pm, px, pyx_c, pym_c, alpha, beta):
     """Update conditional distribution of bottleneck random variable given x.
@@ -317,8 +348,8 @@ def p_mx_c(pm, px, pyx_c, pym_c, alpha, beta):
         # corresponds to the alpha=1 case.
         pmx_c = np.exp(elementwise_l(pm, px, pyx_c, pym_c, alpha, beta))
         z = pmx_c.sum(axis=0)
-        pmx_c /= z # normalize
-    elif alpha==0:
+        pmx_c /= z  # normalize
+    elif alpha == 0:
         # Deterministic Information Bottleneck. As per Algorithm 2 in
         # Strouse 2016, we compute the log-loss function for the
         # vanilla IB (α=1), and for each value of x we set it to 1 for
@@ -328,6 +359,7 @@ def p_mx_c(pm, px, pyx_c, pym_c, alpha, beta):
         pmx_c[np.argmax(l, axis=0), np.arange(l.shape[1])] = 1
         z = 1
     return pmx_c, z
+
 
 def p_ym_c(pm, px, pyx_c, pmx_c):
     """Update conditional distribution of bottleneck variable given y.
@@ -341,9 +373,10 @@ def p_ym_c(pm, px, pyx_c, pmx_c):
     Returns:
     pym_c -- conditional distribution p(Y|M)
     """
-    pym = pyx_c*px[np.newaxis,:] @ pmx_c.T
-    pym_c = pym / pm[np.newaxis,:]
+    pym = pyx_c * px[np.newaxis, :] @ pmx_c.T
+    pym_c = pym / pm[np.newaxis, :]
     return pym_c
+
 
 def p_m(pmx_c, px):
     """Update marginal distribution of bottleneck variable.
@@ -357,6 +390,7 @@ def p_m(pmx_c, px):
     """
     return pmx_c @ px
 
+
 def drop_unused_dimensions(pm, pmx_c, pym_c, eps=0):
     """Remove bottleneck dimensions that are not in use anymore.
 
@@ -368,9 +402,9 @@ def drop_unused_dimensions(pm, pmx_c, pym_c, eps=0):
     NaNs and infinities in the Dkl and when computing p(y|m).
 
     """
-    unused_pm = pm<=eps
-    unused_pmx_c = np.all(pmx_c<=eps, axis=1)
-    unused_pym_c = np.all(pym_c<=eps, axis=0)
+    unused_pm = pm <= eps
+    unused_pmx_c = np.all(pmx_c <= eps, axis=1)
+    unused_pym_c = np.all(pym_c <= eps, axis=0)
     unused = np.any(np.vstack([unused_pm, unused_pmx_c.T, unused_pym_c]), axis=0)
     in_use = ~unused
-    return pm[in_use], pmx_c[in_use,:], pym_c[:,in_use]
+    return pm[in_use], pmx_c[in_use, :], pym_c[:, in_use]
